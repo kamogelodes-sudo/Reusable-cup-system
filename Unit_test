@@ -1,0 +1,163 @@
+% Kamogelo Malatsi, 21809453
+clear;
+clc;
+
+format 
+
+a = readtable('Sensor_Data_for_Prediction.csv');
+b = sortrows(a);
+
+%Split data into days
+D1 = b(1:314,:);
+D2 = b(315:654,:);
+D3 = b(655:end,:);
+
+%Sum of cups out for day 1
+DT_D1 = timeofday(D1.Date_Time);
+Day1_T1 = table(DT_D1,D1.Cups_Out);
+Day1_avg = table2timetable(Day1_T1);
+newTimetable1 = retime(Day1_avg,"regular","sum","TimeStep",minutes(15));
+
+
+%Sum of cups out for day 2
+DT_D2 = timeofday(D2.Date_Time);
+Day2_T1 = table(DT_D2,D2.Cups_Out);
+Day2_avg = table2timetable(Day2_T1);
+newTimetable2 = retime(Day2_avg,"regular","sum","TimeStep",minutes(15));
+
+%Sum of cups out for day 3
+DT_D3 = timeofday(D3.Date_Time);
+Day3_T1 = table(DT_D3,D3.Cups_Out);
+Day3_avg = table2timetable(Day3_T1);
+newTimetable3 = retime(Day3_avg,"regular","sum","TimeStep",minutes(15));
+
+%Convert timetables to tables
+Sum_day1 = timetable2table(newTimetable1);
+Sum_day2 = timetable2table(newTimetable2);
+Sum_day3 = timetable2table(newTimetable3);
+
+%Joined table of Sum of cups for the 3 days 
+joinedData1 = innerjoin(Sum_day1,Sum_day2,"LeftKeys","DT_D1","RightKeys","DT_D2");
+joinedData = innerjoin(joinedData1,Sum_day3,"LeftKeys","DT_D1","RightKeys","DT_D3");
+
+%Create new column in table
+Group = ones(44,1);
+GroupCount = table(Group);
+newtable = [joinedData GroupCount];
+%Loop through columns and add mean into new coloum
+for i = 1:height(newtable)
+
+     newtable.Group(i) = (newtable.Var2_Sum_day1(i) + newtable.Var2_Sum_day2(i) + newtable.Var2(i))/3;
+ end
+
+newtable;
+%Group required coloumns
+Cups_Out = table(newtable.DT_D1,newtable.Group);
+Cups_Out.Properties.VariableNames = ["Time" "Mean_Cups_Out"];
+Eighteenhundred = datetime('18:00:00');
+time_only = timeofday(Eighteenhundred);
+zero_cups = 0.00; 
+eighteen_table = table(time_only,zero_cups);
+eighteen_table.Properties.VariableNames = ["Time" "Mean_Cups_Out"];
+Mean_Cups_Out = [Cups_Out; eighteen_table];
+writetable(Mean_Cups_Out,'Mean_Cups_Out.csv');
+
+%Change varible name to Sum of cups out
+Sum_day1.Properties.VariableNames = ["Time" "Sum_Cups_Out"];
+Sum_day2.Properties.VariableNames = ["Time" "Sum_Cups_Out"];
+Sum_day3.Properties.VariableNames = ["Time" "Sum_Cups_Out"];
+
+%Combine the 18h00 row with the sum cups out table
+eighsum_table = table(time_only,zero_cups);
+eighsum_table.Properties.VariableNames = ["Time" "Sum_Cups_Out"];
+
+Day1_demand = [Sum_day1; eighsum_table];
+Day2_demand = [Sum_day2; eighsum_table];
+Day3_demand = [Sum_day3; eighsum_table];
+
+%Plot graph from 5.3.4
+hold on
+grid on
+plot(Day1_demand.Time,Day1_demand.Sum_Cups_Out)
+plot(Day2_demand.Time,Day2_demand.Sum_Cups_Out)
+plot(Day3_demand.Time,Day3_demand.Sum_Cups_Out)
+plot(Mean_Cups_Out.Time, Mean_Cups_Out.Mean_Cups_Out)
+
+legend('Day1','Day2', 'Day3','mean')
+xlabel('Time');
+ylabel('Demand');
+title('Three-Day Comaparison and mean');
+hold off
+%Begin 5.3.5
+%Create new column
+New_Col = zeros(45,1);
+New_Column = table(New_Col);
+Group2_Table = [Mean_Cups_Out New_Column];
+Group3_Table = [Mean_Cups_Out New_Column];
+%Iterate through table and predict demand
+    for x = 1:38
+         for k = 0:7      
+              Group3_Table.New_Col(x) = Group3_Table.New_Col(x) + Group3_Table.Mean_Cups_Out(x + k);
+         end
+     end
+
+   for m = 39:45
+     Group3_Table.New_Col(m) = Group3_Table.New_Col(m - 1) - Group3_Table.Mean_Cups_Out(m-1);
+     if(m == 45)
+         Group3_Table.New_Col(m) = 0;
+     end
+   end
+%Rename table 
+   Group3_Table.Properties.VariableNames = ["Time" "Mean_Cups_Out" "Demand Prediction for next 2 hours"];
+
+% Begin 5.3.6
+sim = readtable('Sensor_Data_for_Simulation.csv');
+initial_stock = 250;
+in_stock = zeros(45,1);
+stock = table(in_stock);
+in_queue = zeros(45,1);
+queue = table(in_queue);
+in_dishwasher = zeros(45,1);
+dishwasher = table(in_dishwasher);
+message = strings(45,1);
+notifaction = table(message);
+%Create row for quarter to 7
+New_sim = [sim stock queue dishwasher notifaction];
+six = datetime('06:45:00');
+quarterto = timeofday(six);
+%  Set the initial stock size
+new_row = table(quarterto,0,0,initial_stock,0,0,"");
+new_row.Properties.VariableNames = ["Time" "Cups_Ordered" "Cups_Returned" "in_stock" "in_queue" "in_dishwasher" "message"];
+simulation_data = [new_row;New_sim];
+% Iterate through table
+for i = 2:height(simulation_data)
+
+    simulation_data.in_queue(i) = simulation_data.in_queue(i-1) + simulation_data.Cups_Returned(i);
+if (i <= 46)
+    if(simulation_data.in_queue(i) >= 60) && (simulation_data.in_dishwasher(i) ~= 60)
+     simulation_data.in_queue(i) =   simulation_data.in_queue(i) - 60;
+     simulation_data.in_dishwasher(i) = 60;     
+     simulation_data.in_dishwasher(i+1) = 60;   
+    else 
+        if(simulation_data.in_dishwasher(i-1) == 60) && (simulation_data.in_dishwasher(i) == 60)
+        simulation_data.in_dishwasher(i+1) = 0;
+        simulation_data.in_stock(i+1) = simulation_data.in_stock(i) + 60;
+        end
+       
+    end
+   if (simulation_data.Cups_Ordered(i) > (simulation_data.in_stock(i-1) + simulation_data.in_stock(i)))
+    simulation_data.in_stock(i) = 0;
+   simulation_data.message(i) = "Actual demand of " +simulation_data.in_stock(i-1)+ " cups exceeded available stock.";
+   simulation_data.Cups_Ordered(i) = simulation_data.in_stock(i-1);
+   else 
+       simulation_data.in_stock(i) = simulation_data.in_stock(i) + simulation_data.in_stock(i-1) - simulation_data.Cups_Ordered(i);
+       if ( simulation_data.in_stock(i) < Group3_Table.("Demand Prediction for next 2 hours")(i-1))
+            simulation_data.message(i) = "Current stock is below prediction of " +Group3_Table.("Demand Prediction for next 2 hours")(i-1)+...
+                " cups handed out within next 2 hour.";
+       end
+   end
+end
+end 
+%Rename columns to required format
+simulation_data.Properties.VariableNames = ["dt" "cups_out" "cups_returned" "in_stock" "in_queue" "in_dishwasher" "message"];
+writetable(simulation_data,'UnitTest_Result.csv');
